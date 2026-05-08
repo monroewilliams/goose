@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import React from 'react';
 import ImagePreview from './ImagePreview';
 import { formatMessageTimestamp } from '../utils/timeUtils';
 import MarkdownContent from './MarkdownContent';
@@ -7,12 +7,10 @@ import ToolCallWithResponse from './ToolCallWithResponse';
 import {
   getTextAndImageContent,
   getThinkingContent,
-  getToolRequests,
-  getToolResponses,
   getToolConfirmationContent,
   getElicitationContent,
-  getPendingToolConfirmationIds,
-  getAnyToolConfirmationData,
+  ToolRequestMessageContent,
+  ToolResponseMessageContent,
   ToolConfirmationData,
   NotificationEvent,
 } from '../types/message';
@@ -26,10 +24,14 @@ import { shouldHideTimestamp } from '../utils/toolCallChaining';
 interface GooseMessageProps {
   sessionId: string;
   message: Message;
-  messages: Message[];
   messageIndex: number;
   toolCallChains: [number, number][];
   metadata?: string[];
+  toolRequests: ToolRequestMessageContent[];
+  toolResponsesMap: Map<string, ToolResponseMessageContent>;
+  findConfirmationForTool: (toolRequestId: string) => ToolConfirmationData | undefined;
+  pendingConfirmationIds: Set<string>;
+  inlineConfirmationIds: Set<string>;
   toolCallNotifications: Map<string, NotificationEvent[]>;
   append: (value: string) => void;
   isStreaming: boolean;
@@ -39,79 +41,48 @@ interface GooseMessageProps {
   ) => Promise<void>;
 }
 
-export default function GooseMessage({
+const GooseMessageInner = ({
   sessionId,
   message,
-  messages,
   messageIndex,
   toolCallChains,
+  toolRequests,
+  toolResponsesMap,
+  findConfirmationForTool,
+  pendingConfirmationIds,
+  inlineConfirmationIds,
   toolCallNotifications,
   append,
   isStreaming,
   submitElicitationResponse,
-}: GooseMessageProps) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
+}: GooseMessageProps) => {
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
 
   const { textContent: displayText, imagePaths } = getTextAndImageContent(message);
   const thinkingContent = getThinkingContent(message);
 
-  const timestamp = useMemo(() => formatMessageTimestamp(message.created), [message.created]);
-  const toolRequests = getToolRequests(message);
+  const timestamp = formatMessageTimestamp(message.created);
   const toolConfirmationContent = getToolConfirmationContent(message);
   const elicitationContent = getElicitationContent(message);
+  const hideTimestamp = shouldHideTimestamp(messageIndex, toolCallChains);
 
-  const findConfirmationForToolAcrossMessages = (
-    toolRequestId: string
-  ): ToolConfirmationData | undefined => {
-    for (const msg of messages) {
-      const confirmationData = getAnyToolConfirmationData(msg);
-      if (confirmationData && confirmationData.id === toolRequestId) {
-        return confirmationData;
-      }
-    }
-    return undefined;
-  };
-  const hideTimestamp = useMemo(
-    () => shouldHideTimestamp(messageIndex, toolCallChains),
-    [messageIndex, toolCallChains]
-  );
   const hasToolConfirmation = toolConfirmationContent !== undefined;
   const hasElicitation = elicitationContent !== undefined;
 
-  const toolConfirmationShownInline = useMemo(() => {
-    if (!toolConfirmationContent) return false;
-    const confirmationData = getAnyToolConfirmationData(message);
-    if (!confirmationData) return false;
+  // Pre-compute tool request rows to avoid repeated lookups in JSX render loop
+  const toolRequestRows = toolRequests.map((toolRequest) => {
+    const hasResponse = toolResponsesMap.has(toolRequest.id);
+    const isPending = pendingConfirmationIds.has(toolRequest.id);
+    const confirmationContent = findConfirmationForTool(toolRequest.id);
+    const isApprovalClicked = confirmationContent && !isPending && hasResponse;
+    return { toolRequest, hasResponse, isPending, confirmationContent, isApprovalClicked };
+  });
 
-    for (const msg of messages) {
-      const requests = getToolRequests(msg);
-      if (requests.some((req) => req.id === confirmationData.id)) {
-        return true;
-      }
-    }
-    return false;
-  }, [toolConfirmationContent, message, messages]);
-
-  const toolResponsesMap = useMemo(() => {
-    const responseMap = new Map();
-
-    if (messageIndex !== undefined && messageIndex >= 0) {
-      for (let i = messageIndex + 1; i < messages.length; i++) {
-        const responses = getToolResponses(messages[i]);
-
-        for (const response of responses) {
-          const matchingRequest = toolRequests.find((req) => req.id === response.id);
-          if (matchingRequest) {
-            responseMap.set(response.id, response);
-          }
-        }
-      }
-    }
-
-    return responseMap;
-  }, [messages, messageIndex, toolRequests]);
-
-  const pendingConfirmationIds = getPendingToolConfirmationIds(messages);
+  // Check if confirmation is shown inline — any tool request that got confirmation
+  // content via findConfirmationForTool means it's rendered inline in the tool row.
+  const toolConfirmationShownInline = toolRequestRows.some(
+    (row) => row.confirmationContent !== undefined
+  );
 
   return (
     <div className="goose-message flex w-[90%] justify-start min-w-0">
@@ -165,28 +136,22 @@ export default function GooseMessage({
           <div className={cn(displayText && 'mt-2')}>
             <div className="relative flex flex-col w-full">
               <div className="flex flex-col gap-3">
-                {toolRequests.map((toolRequest) => {
-                  const hasResponse = toolResponsesMap.has(toolRequest.id);
-                  const isPending = pendingConfirmationIds.has(toolRequest.id);
-                  const confirmationContent = findConfirmationForToolAcrossMessages(toolRequest.id);
-                  const isApprovalClicked = confirmationContent && !isPending && hasResponse;
-                  return (
-                    <div className="goose-message-tool" key={toolRequest.id}>
-                      <ToolCallWithResponse
-                        sessionId={sessionId}
-                        isCancelledMessage={false}
-                        toolRequest={toolRequest}
-                        toolResponse={toolResponsesMap.get(toolRequest.id)}
-                        notifications={toolCallNotifications.get(toolRequest.id)}
-                        isStreamingMessage={isStreaming}
-                        isPendingApproval={isPending}
-                        append={append}
-                        confirmationContent={confirmationContent}
-                        isApprovalClicked={isApprovalClicked}
-                      />
-                    </div>
-                  );
-                })}
+                {toolRequestRows.map(({ toolRequest, hasResponse, isPending, confirmationContent, isApprovalClicked }) => (
+                  <div className="goose-message-tool" key={toolRequest.id}>
+                    <ToolCallWithResponse
+                      sessionId={sessionId}
+                      isCancelledMessage={false}
+                      toolRequest={toolRequest}
+                      toolResponse={toolResponsesMap.get(toolRequest.id)}
+                      notifications={toolCallNotifications.get(toolRequest.id)}
+                      isStreamingMessage={isStreaming}
+                      isPendingApproval={isPending}
+                      append={append}
+                      confirmationContent={confirmationContent}
+                      isApprovalClicked={isApprovalClicked}
+                    />
+                  </div>
+                ))}
               </div>
               <div className="text-xs text-text-secondary transition-all duration-200 group-hover:-translate-y-4 group-hover:opacity-0 pt-1">
                 {!isStreaming && !hideTimestamp && timestamp}
@@ -195,7 +160,9 @@ export default function GooseMessage({
           </div>
         )}
 
-        {hasToolConfirmation && !toolConfirmationShownInline && (
+        {hasToolConfirmation &&
+          !toolConfirmationShownInline &&
+          !inlineConfirmationIds.has(toolConfirmationContent!.data.id) && (
           <ToolCallConfirmation
             sessionId={sessionId}
             isClicked={false}
@@ -214,4 +181,6 @@ export default function GooseMessage({
       </div>
     </div>
   );
-}
+};
+
+export default React.memo(GooseMessageInner);

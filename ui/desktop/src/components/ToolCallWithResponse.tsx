@@ -217,7 +217,7 @@ function McpAppWrapper({
   );
 }
 
-export default function ToolCallWithResponse({
+const ToolCallWithResponseInner = ({
   sessionId,
   isCancelledMessage,
   toolRequest,
@@ -228,7 +228,7 @@ export default function ToolCallWithResponse({
   append,
   confirmationContent,
   isApprovalClicked,
-}: ToolCallWithResponseProps) {
+}: ToolCallWithResponseProps) => {
   const intl = useIntl();
   // Handle both the wrapped ToolResult format and the unwrapped format
   // The server serializes ToolResult<T> as { status: "success", value: T } or { status: "error", error: string }
@@ -1136,3 +1136,5 @@ const ProgressBar = ({ progress, total, message }: Omit<Progress, 'progressToken
     </div>
   );
 };
+
+export default React.memo(ToolCallWithResponseInner);

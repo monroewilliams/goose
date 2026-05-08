@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ImagePreview from './ImagePreview';
 import MarkdownContent from './MarkdownContent';
 import { getTextAndImageContent } from '../types/message';
@@ -77,10 +77,10 @@ interface UserMessageProps {
   onMessageUpdate?: (messageId: string, newContent: string, editType?: 'fork' | 'edit') => void;
 }
 
-export default function UserMessage({ message, onMessageUpdate }: UserMessageProps) {
+const UserMessageInner = ({ message, onMessageUpdate }: UserMessageProps) => {
   const intl = useIntl();
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -310,4 +310,6 @@ export default function UserMessage({ message, onMessageUpdate }: UserMessagePro
       </div>
     </div>
   );
-}
+};
+
+export default React.memo(UserMessageInner);

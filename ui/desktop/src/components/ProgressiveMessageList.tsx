@@ -2,16 +2,7 @@
  * ProgressiveMessageList Component
  *
  * A performance-optimized message list that renders messages progressively
- * to prevent UI blocking when loading long chat sessions. This component
- * renders messages in batches with a loading indicator, maintaining full
- * compatibility with the search functionality.
- *
- * Key Features:
- * - Progressive rendering in configurable batches
- * - Loading indicator during batch processing
- * - Maintains search functionality compatibility
- * - Smooth user experience with responsive UI
- * - Configurable batch size and delay
+ * to prevent UI blocking when loading long chat sessions.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -27,7 +18,14 @@ import {
   CreditsExhaustedNotification,
   getCreditsExhaustedNotification,
 } from './context_management/CreditsExhaustedNotification';
-import { NotificationEvent } from '../types/message';
+import {
+  NotificationEvent,
+  getToolRequests,
+  getToolResponses,
+  getAnyToolConfirmationData,
+  ToolConfirmationData,
+  getPendingToolConfirmationIds,
+} from '../types/message';
 import LoadingGoose from './LoadingGoose';
 import { ChatType } from '../types/chat';
 import { identifyConsecutiveToolCalls, isInChain } from '../utils/toolCallChaining';
@@ -43,20 +41,26 @@ const i18n = defineMessages({
   },
 });
 
+// Per-message precomputed data - passed to GooseMessage via React.memo props
+interface PerMessagePrecompute {
+  toolRequests: ReturnType<typeof getToolRequests>;
+  toolResponsesMap: Map<string, ReturnType<typeof getToolResponses>[0]>;
+  findConfirmationForTool: (toolRequestId: string) => ToolConfirmationData | undefined;
+}
+
 interface ProgressiveMessageListProps {
   messages: Message[];
   chat: Pick<ChatType, 'sessionId'>;
-  toolCallNotifications?: Map<string, NotificationEvent[]>; // Make optional
-  append?: (value: string) => void; // Make optional
+  toolCallNotifications?: Map<string, NotificationEvent[]>;
+  append?: (value: string) => void;
   isUserMessage: (message: Message) => boolean;
   batchSize?: number;
   batchDelay?: number;
-  showLoadingThreshold?: number; // Only show loading if more than X messages
-  // Custom render function for messages
+  showLoadingThreshold?: number;
   renderMessage?: (message: Message, index: number) => React.ReactNode | null;
-  isStreamingMessage?: boolean; // Whether messages are currently being streamed
+  isStreamingMessage?: boolean;
   onMessageUpdate?: (messageId: string, newContent: string, editType?: 'fork' | 'edit') => void;
-  onRenderingComplete?: () => void; // Callback when all messages are rendered
+  onRenderingComplete?: () => void;
   submitElicitationResponse?: (
     elicitationId: string,
     userData: Record<string, unknown>
@@ -72,15 +76,14 @@ export default function ProgressiveMessageList({
   batchSize = 20,
   batchDelay = 20,
   showLoadingThreshold = 50,
-  renderMessage, // Custom render function
-  isStreamingMessage = false, // Whether messages are currently being streamed
+  renderMessage,
+  isStreamingMessage = false,
   onMessageUpdate,
   onRenderingComplete,
   submitElicitationResponse,
 }: ProgressiveMessageListProps) {
   const intl = useIntl();
   const [renderedCount, setRenderedCount] = useState(() => {
-    // Initialize with either all messages (if small) or first batch (if large)
     return messages.length <= showLoadingThreshold
       ? messages.length
       : Math.min(batchSize, messages.length);
@@ -88,6 +91,7 @@ export default function ProgressiveMessageList({
   const [isLoading, setIsLoading] = useState(() => messages.length > showLoadingThreshold);
   const timeoutRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+
   const hasOnlyToolResponses = (message: Message) =>
     message.content.every((c) => c.type === 'toolResponse');
 
@@ -106,57 +110,40 @@ export default function ProgressiveMessageList({
     }
   };
 
-  // Simple progressive loading - start immediately when component mounts if needed
   useEffect(() => {
     if (messages.length <= showLoadingThreshold) {
       setRenderedCount(messages.length);
       setIsLoading(false);
-      // For small lists, call completion callback immediately
       if (onRenderingComplete) {
         setTimeout(() => onRenderingComplete(), 50);
       }
       return;
     }
 
-    // Large list - start progressive loading
     const loadNextBatch = () => {
       setRenderedCount((current) => {
         const nextCount = Math.min(current + batchSize, messages.length);
-
         if (nextCount >= messages.length) {
           setIsLoading(false);
-          // Call the completion callback after a brief delay to ensure DOM is updated
           if (onRenderingComplete) {
             setTimeout(() => onRenderingComplete(), 50);
           }
         } else {
-          // Schedule next batch
           timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
         }
-
         return nextCount;
       });
     };
 
-    // Start loading after a short delay
     timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
-
     return () => {
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
     };
-  }, [
-    messages.length,
-    batchSize,
-    batchDelay,
-    showLoadingThreshold,
-    renderedCount,
-    onRenderingComplete,
-  ]);
+  }, [messages.length, batchSize, batchDelay, showLoadingThreshold, renderedCount, onRenderingComplete]);
 
-  // Cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -167,19 +154,13 @@ export default function ProgressiveMessageList({
     };
   }, []);
 
-  // Force complete rendering when search is active
   useEffect(() => {
-    // Only add listener if we're actually loading
-    if (!isLoading) {
-      return;
-    }
+    if (!isLoading) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMac = window.electron.platform === 'darwin';
       const isSearchShortcut = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'f';
-
       if (isSearchShortcut) {
-        // Immediately render all messages when search is triggered
         setRenderedCount(messages.length);
         setIsLoading(false);
         if (timeoutRef.current) {
@@ -193,10 +174,84 @@ export default function ProgressiveMessageList({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isLoading, messages.length]);
 
-  // Detect tool call chains
+  // --- P0: Pre-compute everything to avoid O(n^2) scans in GooseMessage ---
+
+  // Global: tool call chains (computed once)
   const toolCallChains = useMemo(() => identifyConsecutiveToolCalls(messages), [messages]);
 
-  // Render messages up to the current rendered count
+  // Global: pending confirmation IDs (O(n) once, not O(n) per message)
+  const pendingConfirmationIds = useMemo(() => getPendingToolConfirmationIds(messages), [messages]);
+
+  // Global: confirmation index (scan all messages ONCE, not once per tool request per message)
+  const confirmationIndex = useMemo(() => {
+    const index = new Map<string, ToolConfirmationData>();
+    for (const msg of messages) {
+      const confirmationData = getAnyToolConfirmationData(msg);
+      if (confirmationData) {
+        index.set(confirmationData.id, confirmationData);
+      }
+    }
+    return index;
+  }, [messages]);
+
+  // Per-message: pre-compute tool requests, response map, and confirmation lookup
+  // O(n) total: build response lookup once, then each message's data is O(tools per message)
+  const perMessageData = useMemo(() => {
+    const data = new Map<string, PerMessagePrecompute>();
+
+    // Build O(n) response lookup: response ID -> response object (single scan of all messages)
+    const responseLookup = new Map<string, ReturnType<typeof getToolResponses>[0]>();
+    for (const msg of messages) {
+      const responses = getToolResponses(msg);
+      for (const resp of responses) {
+        responseLookup.set(resp.id, resp);
+      }
+    }
+
+    // Now each message's precompute is O(tools in this message) - O(1) lookup per tool
+    for (const message of messages) {
+      const toolRequests = getToolRequests(message);
+      const toolResponsesMap = new Map<string, ReturnType<typeof getToolResponses>[0]>();
+
+      // Match responses to this message's tool requests using the O(1) lookup
+      for (const req of toolRequests) {
+        const matching = responseLookup.get(req.id);
+        if (matching) {
+          toolResponsesMap.set(req.id, matching);
+        }
+      }
+
+      // Use the shared confirmationIndex Map directly (no closure per message)
+      const findConfirmationForTool = (toolRequestId: string) => {
+        return confirmationIndex.get(toolRequestId);
+      };
+
+      data.set(message.id!, { toolRequests, toolResponsesMap, findConfirmationForTool });
+    }
+
+    return data;
+  }, [messages, confirmationIndex]);
+
+  // Confirmation IDs already shown inline via findConfirmationForTool on tool request rows.
+  // Tracks which confirmations have been rendered inline (regardless of pending status)
+  // to prevent the standalone ToolCallConfirmation from appearing after the action is processed.
+  const inlineConfirmationIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const msg of messages) {
+      const mData = perMessageData.get(msg.id!);
+      if (!mData) continue;
+      for (const req of mData.toolRequests) {
+        const confirmation = confirmationIndex.get(req.id);
+        if (confirmation) {
+          ids.add(confirmation.id);
+        }
+      }
+    }
+    return ids;
+  }, [messages, perMessageData, confirmationIndex]);
+
+  // --- Render ---
+
   const renderMessages = useCallback(() => {
     const messagesToRender = messages.slice(0, renderedCount);
     return messagesToRender
@@ -208,11 +263,8 @@ export default function ProgressiveMessageList({
           return renderMessage(message, index);
         }
 
-        // Default rendering logic (for BaseChat)
         if (!chat) {
-          console.warn(
-            'ProgressiveMessageList: chat prop is required when not using custom renderMessage'
-          );
+          console.warn('ProgressiveMessageList: chat prop is required when not using custom renderMessage');
           return null;
         }
 
@@ -231,6 +283,22 @@ export default function ProgressiveMessageList({
 
         const isUser = isUserMessage(message);
         const messageIsInChain = isInChain(index, toolCallChains);
+        const mData = perMessageData.get(message.id!);
+
+        // Fallback for messages with no precompute data
+        if (!mData) {
+          return (
+            <div
+              key={message.id ?? `msg-${index}-${message.created}`}
+              className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
+              data-testid="message-container"
+            >
+              {isUser && !hasOnlyToolResponses(message) ? (
+                <UserMessage message={message} onMessageUpdate={onMessageUpdate} />
+              ) : null}
+            </div>
+          );
+        }
 
         return (
           <div
@@ -246,9 +314,13 @@ export default function ProgressiveMessageList({
               <GooseMessage
                 sessionId={chat.sessionId}
                 message={message}
-                messages={messages}
                 messageIndex={index}
                 toolCallChains={toolCallChains}
+                toolRequests={mData.toolRequests}
+                toolResponsesMap={mData.toolResponsesMap}
+                findConfirmationForTool={mData.findConfirmationForTool}
+                pendingConfirmationIds={pendingConfirmationIds}
+                inlineConfirmationIds={inlineConfirmationIds}
                 append={append}
                 toolCallNotifications={toolCallNotifications}
                 isStreaming={
@@ -275,6 +347,8 @@ export default function ProgressiveMessageList({
     isStreamingMessage,
     onMessageUpdate,
     toolCallChains,
+    perMessageData,
+    pendingConfirmationIds,
     submitElicitationResponse,
   ]);
 
