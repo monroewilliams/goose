@@ -43,6 +43,7 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
     const [isScrolled, setIsScrolled] = React.useState(false);
     const userScrolledUpRef = React.useRef(false);
     const lastScrollHeightRef = React.useRef(0);
+    const childrenHeightRef = React.useRef(0);
     const isActivelyScrollingRef = React.useRef(false);
     const scrollTimeoutRef = React.useRef<number | null>(null);
 
@@ -151,7 +152,9 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
       if (!autoScroll || !viewportRef.current) return;
 
       const viewport = viewportRef.current;
-      const currentScrollHeight = viewport.scrollHeight;
+      // Read height from ref (updated after DOM paints) rather than from children
+      // which changes on every render
+      const currentScrollHeight = childrenHeightRef.current;
 
       // Only auto-scroll if:
       // 1. Content has actually grown (new content added)
@@ -176,7 +179,16 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
       }
 
       lastScrollHeightRef.current = currentScrollHeight;
-    }, [children, autoScroll, isFollowing]);
+    }, [autoScroll, isFollowing]);
+
+    // Keep childrenHeightRef in sync with actual viewport content height.
+    // This runs after each render so the auto-scroll effect can read the height
+    // without depending on `children` (which changes on every render).
+    React.useEffect(() => {
+      if (viewportRef.current) {
+        childrenHeightRef.current = viewportRef.current.scrollHeight;
+      }
+    });
 
     // Add scroll event listener
     React.useEffect(() => {
