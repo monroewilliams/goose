@@ -21,12 +21,14 @@ import ToolCallConfirmation from './ToolCallConfirmation';
 import ElicitationRequest from './ElicitationRequest';
 import MessageCopyLink from './MessageCopyLink';
 import { cn } from '../utils';
-import { identifyConsecutiveToolCalls, shouldHideTimestamp } from '../utils/toolCallChaining';
+import { shouldHideTimestamp } from '../utils/toolCallChaining';
 
 interface GooseMessageProps {
   sessionId: string;
   message: Message;
   messages: Message[];
+  messageIndex: number;
+  toolCallChains: [number, number][];
   metadata?: string[];
   toolCallNotifications: Map<string, NotificationEvent[]>;
   append: (value: string) => void;
@@ -41,6 +43,8 @@ export default function GooseMessage({
   sessionId,
   message,
   messages,
+  messageIndex,
+  toolCallChains,
   toolCallNotifications,
   append,
   isStreaming,
@@ -53,7 +57,6 @@ export default function GooseMessage({
 
   const timestamp = useMemo(() => formatMessageTimestamp(message.created), [message.created]);
   const toolRequests = getToolRequests(message);
-  const messageIndex = messages.findIndex((msg) => msg.id === message.id);
   const toolConfirmationContent = getToolConfirmationContent(message);
   const elicitationContent = getElicitationContent(message);
 
@@ -68,7 +71,6 @@ export default function GooseMessage({
     }
     return undefined;
   };
-  const toolCallChains = useMemo(() => identifyConsecutiveToolCalls(messages), [messages]);
   const hideTimestamp = useMemo(
     () => shouldHideTimestamp(messageIndex, toolCallChains),
     [messageIndex, toolCallChains]
