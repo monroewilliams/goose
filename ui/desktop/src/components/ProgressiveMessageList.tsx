@@ -65,6 +65,8 @@ interface ProgressiveMessageListProps {
     elicitationId: string,
     userData: Record<string, unknown>
   ) => Promise<void>;
+  initialDirection?: 'top' | 'bottom';
+  onScrollToBottom?: () => void;
 }
 
 export default function ProgressiveMessageList({
@@ -81,6 +83,8 @@ export default function ProgressiveMessageList({
   onMessageUpdate,
   onRenderingComplete,
   submitElicitationResponse,
+  initialDirection = 'top',
+  onScrollToBottom,
 }: ProgressiveMessageListProps) {
   const intl = useIntl();
   const [renderedCount, setRenderedCount] = useState(() => {
@@ -91,6 +95,17 @@ export default function ProgressiveMessageList({
   const [isLoading, setIsLoading] = useState(() => messages.length > showLoadingThreshold);
   const timeoutRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const hasScrolledOnMountRef = useRef(false);
+
+  // Count of messages hidden at the top (not yet rendered) for bottom-up rendering
+  const hiddenTopCount = useMemo(() => {
+    if (initialDirection === 'top') {
+      // Top-down: hidden messages are at the end (beyond renderedCount)
+      return Math.max(0, messages.length - renderedCount);
+    }
+    // Bottom-up: hidden messages are at the top (before the bottom batch)
+    return Math.max(0, messages.length - renderedCount);
+  }, [messages.length, renderedCount, initialDirection]);
 
   const hasOnlyToolResponses = (message: Message) =>
     message.content.every((c) => c.type === 'toolResponse');
@@ -153,6 +168,17 @@ export default function ProgressiveMessageList({
       }
     };
   }, []);
+
+  // Scroll to bottom immediately after the first render in bottom-up mode.
+  // This prevents the user from seeing a top-loaded list that then jumps.
+  useEffect(() => {
+    if (initialDirection === 'bottom' && !hasScrolledOnMountRef.current && onScrollToBottom && renderedCount >= batchSize) {
+      hasScrolledOnMountRef.current = true;
+      requestAnimationFrame(() => {
+        onScrollToBottom();
+      });
+    }
+  }, [initialDirection, renderedCount, batchSize, onScrollToBottom]);
 
   useEffect(() => {
     if (!isLoading) return;
@@ -253,9 +279,28 @@ export default function ProgressiveMessageList({
   // --- Render ---
 
   const renderMessages = useCallback(() => {
-    const messagesToRender = messages.slice(0, renderedCount);
-    return messagesToRender
+    // Determine hidden zones for progressive rendering
+    // Top-down: hidden = indices >= renderedCount (after the visible region)
+    // Bottom-up: hidden = indices < hiddenTopCount (before the visible region)
+    const isHidden = (index: number) => {
+      if (initialDirection === 'bottom') {
+        return index < hiddenTopCount;
+      }
+      return index >= renderedCount;
+    };
+
+    return messages
       .map((message, index) => {
+        if (isHidden(index)) {
+          // Height placeholder to maintain scroll area height and bottom positioning
+          return (
+            <div
+              key={`hidden-${message.id ?? `msg-${index}-${message.created}`}`}
+              style={{ minHeight: 120 }}
+            />
+          );
+        }
+
         if (!message.metadata.userVisible) {
           return null;
         }
@@ -273,7 +318,7 @@ export default function ProgressiveMessageList({
           return (
             <div
               key={`notification-${message.id ?? `msg-${index}-${message.created}`}`}
-              className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} assistant`}
+              className={`relative ${index === 0 || !isHidden(index - 1) ? 'mt-0' : 'mt-4'} assistant`}
               data-testid="message-container"
             >
               {renderSystemNotification(notification)}
@@ -290,7 +335,7 @@ export default function ProgressiveMessageList({
           return (
             <div
               key={message.id ?? `msg-${index}-${message.created}`}
-              className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
+              className={`relative ${index === 0 || !isHidden(index - 1) ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
               data-testid="message-container"
             >
               {isUser && !hasOnlyToolResponses(message) ? (
@@ -303,7 +348,7 @@ export default function ProgressiveMessageList({
         return (
           <div
             key={message.id ?? `msg-${index}-${message.created}`}
-            className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
+            className={`relative ${index === 0 || !isHidden(index - 1) ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
             data-testid="message-container"
           >
             {isUser ? (
@@ -326,7 +371,7 @@ export default function ProgressiveMessageList({
                 isStreaming={
                   isStreamingMessage &&
                   !isUser &&
-                  index === messagesToRender.length - 1 &&
+                  index === messages.length - 1 &&
                   message.role === 'assistant'
                 }
                 submitElicitationResponse={submitElicitationResponse}
@@ -350,6 +395,8 @@ export default function ProgressiveMessageList({
     perMessageData,
     pendingConfirmationIds,
     submitElicitationResponse,
+    hiddenTopCount,
+    initialDirection,
   ]);
 
   return (

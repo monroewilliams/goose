@@ -233,13 +233,15 @@ export default function BaseChat({
 
   // Track if this is the initial render for session resuming
   const initialRenderRef = useRef(true);
+  // Track whether initial bottom-up scroll already happened
+  const hasScrolledOnMountRef = useRef(false);
 
   // Auto-scroll when messages are loaded (for session resuming)
   const handleRenderingComplete = React.useCallback(() => {
     // Only force scroll on the very first render
     if (initialRenderRef.current && messages.length > 0) {
       initialRenderRef.current = false;
-      if (scrollRef.current?.scrollToBottom) {
+      if (!hasScrolledOnMountRef.current && scrollRef.current?.scrollToBottom) {
         scrollRef.current.scrollToBottom();
       }
     } else if (scrollRef.current?.isFollowing) {
@@ -462,6 +464,11 @@ export default function BaseChat({
                     append={(text: string) => handleSubmit({ msg: text, images: [] })}
                     isUserMessage={(m: Message) => m.role === 'user'}
                     isStreamingMessage={chatState !== ChatState.Idle}
+                    initialDirection={initialRenderRef.current ? 'bottom' : 'top'}
+                    onScrollToBottom={() => {
+                      hasScrolledOnMountRef.current = true;
+                      scrollRef.current?.scrollToBottom({ behavior: 'auto' });
+                    }}
                     onRenderingComplete={handleRenderingComplete}
                     onMessageUpdate={onMessageUpdate}
                     submitElicitationResponse={submitElicitationResponse}

@@ -6,7 +6,7 @@ type ScrollBehavior = 'auto' | 'smooth';
 import { cn } from '../../utils';
 
 export interface ScrollAreaHandle {
-  scrollToBottom: () => void;
+  scrollToBottom: (options?: { behavior?: ScrollBehavior }) => void;
   scrollToPosition: (options: { top: number; behavior?: ScrollBehavior }) => void;
   isAtBottom: () => boolean;
   isFollowing: boolean;
@@ -59,18 +59,21 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
       return distanceFromBottom <= BOTTOM_SCROLL_THRESHOLD;
     }, []);
 
-    const scrollToBottom = React.useCallback(() => {
-      if (viewportRef.current) {
-        viewportRef.current.scrollTo({
-          top: viewportRef.current.scrollHeight,
-          behavior: 'smooth',
-        });
-        // When explicitly scrolling to bottom, reset the following state
-        setIsFollowing(true);
-        userScrolledUpRef.current = false;
-        onScrollChange?.(true);
-      }
-    }, [onScrollChange]);
+    const scrollToBottom = React.useCallback(
+      ({ behavior }: { behavior?: ScrollBehavior } = {}) => {
+        if (viewportRef.current) {
+          viewportRef.current.scrollTo({
+            top: viewportRef.current.scrollHeight,
+            behavior: behavior ?? 'smooth',
+          });
+          // When explicitly scrolling to bottom, reset the following state
+          setIsFollowing(true);
+          userScrolledUpRef.current = false;
+          onScrollChange?.(true);
+        }
+      },
+      [onScrollChange]
+    );
 
     const scrollToPosition = React.useCallback(
       ({ top, behavior = 'smooth' }: { top: number; behavior?: ScrollBehavior }) => {
