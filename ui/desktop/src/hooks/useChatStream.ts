@@ -217,6 +217,7 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+const STREAMING_BATCH_INTERVAL = 100;
 const REDUCED_MOTION_BATCH_INTERVAL = 1000;
 
 /**
@@ -232,42 +233,45 @@ function createEventProcessor(
 ) {
   let currentMessages = initialMessages;
   const reduceMotion = prefersReducedMotion();
-  let latestTokenState: TokenState | null = null;
-  let latestChatState: ChatState = ChatState.Streaming;
-  let lastBatchUpdate = Date.now();
-  let hasPendingUpdate = false;
+  const batchInterval = reduceMotion ? REDUCED_MOTION_BATCH_INTERVAL : STREAMING_BATCH_INTERVAL;
+  let pendingMessages: Message[] | null = null;
+  let pendingTokenState: TokenState | null = null;
+  let pendingChatState: ChatState | null = null;
+  let flushTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const flushBatchedUpdates = () => {
-    if (reduceMotion && hasPendingUpdate) {
-      if (latestTokenState) {
-        dispatch({ type: 'SET_TOKEN_STATE', payload: latestTokenState });
+  const flushPendingUpdates = () => {
+    if (pendingMessages !== null) {
+      if (pendingTokenState) {
+        dispatch({ type: 'SET_TOKEN_STATE', payload: pendingTokenState });
       }
-      dispatch({ type: 'SET_MESSAGES', payload: currentMessages });
-      dispatch({ type: 'SET_CHAT_STATE', payload: latestChatState });
-      hasPendingUpdate = false;
-      lastBatchUpdate = Date.now();
+      dispatch({ type: 'SET_MESSAGES', payload: pendingMessages });
+      if (pendingChatState !== null) {
+        dispatch({ type: 'SET_CHAT_STATE', payload: pendingChatState });
+      }
+      pendingMessages = null;
+      pendingTokenState = null;
+      pendingChatState = null;
+      flushTimeout = null;
     }
   };
 
   const maybeUpdateUI = (tokenState: TokenState, chatState: ChatState, forceImmediate = false) => {
-    if (!reduceMotion) {
+    if (forceImmediate) {
+      flushPendingUpdates();
       dispatch({ type: 'SET_TOKEN_STATE', payload: tokenState });
       dispatch({ type: 'SET_MESSAGES', payload: currentMessages });
       dispatch({ type: 'SET_CHAT_STATE', payload: chatState });
-    } else if (forceImmediate) {
-      dispatch({ type: 'SET_TOKEN_STATE', payload: tokenState });
-      dispatch({ type: 'SET_MESSAGES', payload: currentMessages });
-      dispatch({ type: 'SET_CHAT_STATE', payload: chatState });
-      hasPendingUpdate = false;
-      lastBatchUpdate = Date.now();
-    } else {
-      latestTokenState = tokenState;
-      latestChatState = chatState;
-      hasPendingUpdate = true;
-      const now = Date.now();
-      if (now - lastBatchUpdate >= REDUCED_MOTION_BATCH_INTERVAL) {
-        flushBatchedUpdates();
-      }
+      return;
+    }
+
+    pendingMessages = currentMessages;
+    pendingTokenState = tokenState;
+    pendingChatState = chatState;
+
+    if (!flushTimeout) {
+      flushTimeout = setTimeout(() => {
+        flushPendingUpdates();
+      }, batchInterval);
     }
   };
 
@@ -301,7 +305,7 @@ function createEventProcessor(
         return false;
       }
       case 'Error': {
-        flushBatchedUpdates();
+        flushPendingUpdates();
         const errorMsg = String((event as Record<string, unknown>).error ?? '');
         if (errorMsg.includes('too far behind') && onReloadNeeded) {
           // Server indicated we missed events — end streaming without setting
@@ -315,7 +319,7 @@ function createEventProcessor(
         return true;
       }
       case 'Finish': {
-        flushBatchedUpdates();
+        flushPendingUpdates();
         onFinish();
         return true;
       }
@@ -325,7 +329,12 @@ function createEventProcessor(
         if (!reduceMotion) {
           dispatch({ type: 'SET_MESSAGES', payload: conversation });
         } else {
-          hasPendingUpdate = true;
+          pendingMessages = conversation;
+          if (!flushTimeout) {
+            flushTimeout = setTimeout(() => {
+              flushPendingUpdates();
+            }, batchInterval);
+          }
         }
         return false;
       }
