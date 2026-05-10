@@ -48,6 +48,11 @@ interface PerMessagePrecompute {
   findConfirmationForTool: (toolRequestId: string) => ToolConfirmationData | undefined;
 }
 
+interface RenderedMessage {
+  message: Message;
+  index: number;
+}
+
 interface ProgressiveMessageListProps {
   messages: Message[];
   chat: Pick<ChatType, 'sessionId'>;
@@ -61,12 +66,12 @@ interface ProgressiveMessageListProps {
   isStreamingMessage?: boolean;
   onMessageUpdate?: (messageId: string, newContent: string, editType?: 'fork' | 'edit') => void;
   onRenderingComplete?: () => void;
+  onScrollReady?: () => void;
+  scrollReadyRef?: React.MutableRefObject<boolean | undefined>;
   submitElicitationResponse?: (
     elicitationId: string,
     userData: Record<string, unknown>
   ) => Promise<void>;
-  initialDirection?: 'top' | 'bottom';
-  onScrollToBottom?: () => void;
 }
 
 export default function ProgressiveMessageList({
@@ -82,30 +87,45 @@ export default function ProgressiveMessageList({
   isStreamingMessage = false,
   onMessageUpdate,
   onRenderingComplete,
+  onScrollReady,
+  scrollReadyRef,
   submitElicitationResponse,
-  initialDirection = 'top',
-  onScrollToBottom,
 }: ProgressiveMessageListProps) {
   const intl = useIntl();
   const [renderedCount, setRenderedCount] = useState(() => {
-    return messages.length <= showLoadingThreshold
-      ? messages.length
-      : Math.min(batchSize, messages.length);
+    if (messages.length <= showLoadingThreshold) {
+      return messages.length;
+    }
+    // Start with one batch — matches renderedSet initial state
+    return Math.min(batchSize, messages.length);
+  });
+  const [renderedSet, setRenderedSet] = useState<RenderedMessage[]>(() => {
+    if (messages.length === 0) return [];
+    // Start with the last batch so there's real content for the ScrollArea to scroll to
+    const count = Math.min(batchSize, messages.length);
+    return messages
+      .slice(messages.length - count)
+      .map((msg, i) => ({ message: msg, index: messages.length - count + i }));
   });
   const [isLoading, setIsLoading] = useState(() => messages.length > showLoadingThreshold);
+  const prevMsgCountRef = useRef(messages.length);
   const timeoutRef = useRef<number | null>(null);
-  const mountedRef = useRef(true);
-  const hasScrolledOnMountRef = useRef(false);
+  // Gate batch loading on scroll completion
+  const batchLoadingReadyRef = useRef(false);
 
-  // Count of messages hidden at the top (not yet rendered) for bottom-up rendering
-  const hiddenTopCount = useMemo(() => {
-    if (initialDirection === 'top') {
-      // Top-down: hidden messages are at the end (beyond renderedCount)
-      return Math.max(0, messages.length - renderedCount);
+  // Signal to parent that we have content and are ready to scroll.
+  useEffect(() => {
+    if (renderedSet.length > 0 && onScrollReady) {
+      onScrollReady();
     }
-    // Bottom-up: hidden messages are at the top (before the bottom batch)
-    return Math.max(0, messages.length - renderedCount);
-  }, [messages.length, renderedCount, initialDirection]);
+  }, [onScrollReady, renderedSet.length]);
+
+  // Called by parent after scroll succeeds — starts batch loading.
+  useEffect(() => {
+    if (scrollReadyRef && scrollReadyRef.current) {
+      batchLoadingReadyRef.current = true;
+    }
+  }, [scrollReadyRef, scrollReadyRef?.current]);
 
   const hasOnlyToolResponses = (message: Message) =>
     message.content.every((c) => c.type === 'toolResponse');
@@ -135,19 +155,40 @@ export default function ProgressiveMessageList({
       return;
     }
 
+    // Wait for scroll to complete before starting batch loading.
+    // This ensures the bottom message is pinned before content grows above it.
+    if (!batchLoadingReadyRef.current) return;
+
+    // Start batch loading
     const loadNextBatch = () => {
-      setRenderedCount((current) => {
-        const nextCount = Math.min(current + batchSize, messages.length);
-        if (nextCount >= messages.length) {
-          setIsLoading(false);
-          if (onRenderingComplete) {
-            setTimeout(() => onRenderingComplete(), 50);
-          }
-        } else {
-          timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
+      const doneRef = { current: false };
+
+      setRenderedCount((currentCount) => {
+        const nextCount = Math.min(currentCount + batchSize, messages.length);
+        doneRef.current = nextCount >= messages.length;
+
+        // Prepend new messages to the rendered set (bottom-up)
+        const startIdx = messages.length - nextCount;
+        const endIdx = messages.length - currentCount;
+        if (startIdx < endIdx) {
+          const newMessages = messages.slice(startIdx, endIdx).map((msg, i) => ({
+            message: msg,
+            index: startIdx + i,
+          }));
+          setRenderedSet((prev) => [...newMessages, ...prev]); // prepend
         }
+
         return nextCount;
       });
+
+      if (doneRef.current) {
+        setIsLoading(false);
+        if (onRenderingComplete) {
+          setTimeout(() => onRenderingComplete(), 50);
+        }
+      } else {
+        timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
+      }
     };
 
     timeoutRef.current = window.setTimeout(loadNextBatch, batchDelay);
@@ -159,26 +200,22 @@ export default function ProgressiveMessageList({
     };
   }, [messages.length, batchSize, batchDelay, showLoadingThreshold, renderedCount, onRenderingComplete]);
 
+  // Sync renderedSet when new messages are appended (e.g., during streaming).
+  // Only adds the newly appended messages (at the end of the messages array).
+  // The batch loop handles initial progressive loading; this effect handles streaming.
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (timeoutRef.current) {
-        window.clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  // Scroll to bottom immediately after the first render in bottom-up mode.
-  // This prevents the user from seeing a top-loaded list that then jumps.
-  useEffect(() => {
-    if (initialDirection === 'bottom' && !hasScrolledOnMountRef.current && onScrollToBottom && renderedCount >= batchSize) {
-      hasScrolledOnMountRef.current = true;
-      requestAnimationFrame(() => {
-        onScrollToBottom();
-      });
+    const prevLen = prevMsgCountRef.current;
+    prevMsgCountRef.current = messages.length;
+    if (messages.length > prevLen) {
+      // New messages were appended at the end. Only add the delta.
+      const delta = messages.length - prevLen;
+      const newMessages = messages.slice(messages.length - delta, messages.length).map((msg, i) => ({
+        message: msg,
+        index: messages.length - delta + i,
+      }));
+      setRenderedSet((prev) => [...prev, ...newMessages]);
     }
-  }, [initialDirection, renderedCount, batchSize, onScrollToBottom]);
+  }, [messages]);
 
   useEffect(() => {
     if (!isLoading) return;
@@ -279,111 +316,89 @@ export default function ProgressiveMessageList({
   // --- Render ---
 
   const renderMessages = useCallback(() => {
-    // Determine hidden zones for progressive rendering
-    // Top-down: hidden = indices >= renderedCount (after the visible region)
-    // Bottom-up: hidden = indices < hiddenTopCount (before the visible region)
-    const isHidden = (index: number) => {
-      if (initialDirection === 'bottom') {
-        return index < hiddenTopCount;
+    return renderedSet.map(({ message, index }) => {
+      if (!message.metadata.userVisible) {
+        return null;
       }
-      return index >= renderedCount;
-    };
+      if (renderMessage) {
+        return renderMessage(message, index);
+      }
 
-    return messages
-      .map((message, index) => {
-        if (isHidden(index)) {
-          // Height placeholder to maintain scroll area height and bottom positioning
-          return (
-            <div
-              key={`hidden-${message.id ?? `msg-${index}-${message.created}`}`}
-              style={{ minHeight: 120 }}
-            />
-          );
-        }
+      if (!chat) {
+        console.warn('ProgressiveMessageList: chat prop is required when not using custom renderMessage');
+        return null;
+      }
 
-        if (!message.metadata.userVisible) {
-          return null;
-        }
-        if (renderMessage) {
-          return renderMessage(message, index);
-        }
+      const notification = getSystemNotification(message);
+      if (notification) {
+        return (
+          <div
+            key={`notification-${message.id ?? `msg-${index}-${message.created}`}`}
+            className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} assistant`}
+            data-testid="message-container"
+          >
+            {renderSystemNotification(notification)}
+          </div>
+        );
+      }
 
-        if (!chat) {
-          console.warn('ProgressiveMessageList: chat prop is required when not using custom renderMessage');
-          return null;
-        }
+      const isUser = isUserMessage(message);
+      const messageIsInChain = isInChain(index, toolCallChains);
+      const mData = perMessageData.get(message.id!);
 
-        const notification = getSystemNotification(message);
-        if (notification) {
-          return (
-            <div
-              key={`notification-${message.id ?? `msg-${index}-${message.created}`}`}
-              className={`relative ${index === 0 || !isHidden(index - 1) ? 'mt-0' : 'mt-4'} assistant`}
-              data-testid="message-container"
-            >
-              {renderSystemNotification(notification)}
-            </div>
-          );
-        }
-
-        const isUser = isUserMessage(message);
-        const messageIsInChain = isInChain(index, toolCallChains);
-        const mData = perMessageData.get(message.id!);
-
-        // Fallback for messages with no precompute data
-        if (!mData) {
-          return (
-            <div
-              key={message.id ?? `msg-${index}-${message.created}`}
-              className={`relative ${index === 0 || !isHidden(index - 1) ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
-              data-testid="message-container"
-            >
-              {isUser && !hasOnlyToolResponses(message) ? (
-                <UserMessage message={message} onMessageUpdate={onMessageUpdate} />
-              ) : null}
-            </div>
-          );
-        }
-
+      // Fallback for messages with no precompute data
+      if (!mData) {
         return (
           <div
             key={message.id ?? `msg-${index}-${message.created}`}
-            className={`relative ${index === 0 || !isHidden(index - 1) ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
+            className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
             data-testid="message-container"
           >
-            {isUser ? (
-              !hasOnlyToolResponses(message) && (
-                <UserMessage message={message} onMessageUpdate={onMessageUpdate} />
-              )
-            ) : (
-              <GooseMessage
-                sessionId={chat.sessionId}
-                message={message}
-                messageIndex={index}
-                toolCallChains={toolCallChains}
-                toolRequests={mData.toolRequests}
-                toolResponsesMap={mData.toolResponsesMap}
-                findConfirmationForTool={mData.findConfirmationForTool}
-                pendingConfirmationIds={pendingConfirmationIds}
-                inlineConfirmationIds={inlineConfirmationIds}
-                append={append}
-                toolCallNotifications={toolCallNotifications}
-                isStreaming={
-                  isStreamingMessage &&
-                  !isUser &&
-                  index === messages.length - 1 &&
-                  message.role === 'assistant'
-                }
-                submitElicitationResponse={submitElicitationResponse}
-              />
-            )}
+            {isUser && !hasOnlyToolResponses(message) ? (
+              <UserMessage message={message} onMessageUpdate={onMessageUpdate} />
+            ) : null}
           </div>
         );
-      })
-      .filter(Boolean);
+      }
+
+      return (
+        <div
+          key={message.id ?? `msg-${index}-${message.created}`}
+          className={`relative ${index === 0 ? 'mt-0' : 'mt-4'} ${isUser ? 'user' : 'assistant'} ${messageIsInChain ? 'in-chain' : ''}`}
+          data-testid="message-container"
+        >
+          {isUser ? (
+            !hasOnlyToolResponses(message) && (
+              <UserMessage message={message} onMessageUpdate={onMessageUpdate} />
+            )
+          ) : (
+            <GooseMessage
+              sessionId={chat.sessionId}
+              message={message}
+              messageIndex={index}
+              toolCallChains={toolCallChains}
+              toolRequests={mData.toolRequests}
+              toolResponsesMap={mData.toolResponsesMap}
+              findConfirmationForTool={mData.findConfirmationForTool}
+              pendingConfirmationIds={pendingConfirmationIds}
+              inlineConfirmationIds={inlineConfirmationIds}
+              append={append}
+              toolCallNotifications={toolCallNotifications}
+              isStreaming={
+                isStreamingMessage &&
+                !isUser &&
+                index === messages.length - 1 &&
+                message.role === 'assistant'
+              }
+              submitElicitationResponse={submitElicitationResponse}
+            />
+          )}
+        </div>
+      );
+    });
   }, [
+    renderedSet,
     messages,
-    renderedCount,
     renderMessage,
     isUserMessage,
     chat,
@@ -395,15 +410,13 @@ export default function ProgressiveMessageList({
     perMessageData,
     pendingConfirmationIds,
     submitElicitationResponse,
-    hiddenTopCount,
-    initialDirection,
   ]);
 
   return (
     <>
       {renderMessages()}
 
-      {/* Loading indicator when progressively rendering */}
+      {/* Loading indicator at the bottom, shown while progressively rendering */}
       {isLoading && (
         <div className="flex flex-col items-center justify-center py-8">
           <LoadingGoose

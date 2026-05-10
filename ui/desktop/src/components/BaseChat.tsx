@@ -231,25 +231,18 @@ export default function BaseChat({
     }
   };
 
-  // Track if this is the initial render for session resuming
-  const initialRenderRef = useRef(true);
-  // Track whether initial bottom-up scroll already happened
-  const hasScrolledOnMountRef = useRef(false);
-
   // Auto-scroll when messages are loaded (for session resuming)
+  // Initial scroll is handled by ProgressiveMessageList on mount.
+  // This handles subsequent scrolls (e.g., when user returns to bottom during streaming).
   const handleRenderingComplete = React.useCallback(() => {
-    // Only force scroll on the very first render
-    if (initialRenderRef.current && messages.length > 0) {
-      initialRenderRef.current = false;
-      if (!hasScrolledOnMountRef.current && scrollRef.current?.scrollToBottom) {
-        scrollRef.current.scrollToBottom();
-      }
-    } else if (scrollRef.current?.isFollowing) {
-      if (scrollRef.current?.scrollToBottom) {
-        scrollRef.current.scrollToBottom();
-      }
+    if (scrollRef.current?.isFollowing) {
+      scrollRef.current.scrollToBottom({ behavior: 'auto' });
     }
   }, [messages.length]);
+
+  // Tracks whether mount scroll has completed
+  const hasScrolledRef = useRef(false);
+  const scrollReadyRef = useRef<boolean>(undefined);
 
   const toolCount = useToolCount(sessionId);
 
@@ -464,11 +457,24 @@ export default function BaseChat({
                     append={(text: string) => handleSubmit({ msg: text, images: [] })}
                     isUserMessage={(m: Message) => m.role === 'user'}
                     isStreamingMessage={chatState !== ChatState.Idle}
-                    initialDirection={initialRenderRef.current ? 'bottom' : 'top'}
-                    onScrollToBottom={() => {
-                      hasScrolledOnMountRef.current = true;
-                      scrollRef.current?.scrollToBottom({ behavior: 'auto' });
+                    onScrollReady={() => {
+                      // ProgressiveMessageList has content, scroll now with retry
+                      if (hasScrolledRef.current) return;
+                      const tryScroll = () => {
+                        const viewport = scrollRef.current?.viewportRef.current;
+                        if (!viewport || viewport.scrollHeight === 0) {
+                          requestAnimationFrame(tryScroll);
+                          return;
+                        }
+                        if (scrollRef.current?.scrollToBottom) {
+                          scrollRef.current.scrollToBottom({ behavior: 'auto' });
+                          hasScrolledRef.current = true;
+                          scrollReadyRef.current = true;
+                        }
+                      };
+                      tryScroll();
                     }}
+                    scrollReadyRef={scrollReadyRef}
                     onRenderingComplete={handleRenderingComplete}
                     onMessageUpdate={onMessageUpdate}
                     submitElicitationResponse={submitElicitationResponse}

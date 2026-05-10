@@ -1,7 +1,7 @@
 # Goose Chat Display Performance Analysis & Optimization Plan
 
-**Date:** 2026-05-06  
-**Status:** Analysis complete, implementation pending
+**Date:** 2026-05-06
+**Status:** P0, P1, P2, P5 implemented. Remaining: P3 (if not done), P4.
 
 ---
 
@@ -146,15 +146,116 @@ Key changes:
 
 Move `messageIndex` computation from inside each `GooseMessage` (where it does `findIndex` — O(n) per message) to `ProgressiveMessageList` where it's just the loop index. Pass it as a prop.
 
-### P2: Bottom-Up Rendering for Large Chats
+### P2: Bottom-Up Progressive DOM Prepending (IMPLEMENTED)
 
-For chats above a threshold (e.g., >100 messages), render from the bottom up:
-- Start with the last `batchSize` messages
-- Scroll to bottom immediately
-- Fill upwards in background batches
-- This way the user sees content they care about first
+For loaded chats, render messages starting from the most recent (bottom) and prepend older messages above. The bottom message stays pinned — no movement, no scroll animation during loading.
 
-Alternatively, use the `initialRenderRef` in `BaseChat` to skip progressive rendering entirely for loaded chats — render all at once and scroll to bottom. Progressive loading helps when the user is on a new chat; it hurts when opening old ones.
+**Key changes:**
+
+- `ProgressiveMessageList` uses a `renderedSet` state (array of `{message, index}`) instead of `messages.slice(0, renderedCount)`
+- `renderedSet` initializes with the last `batchSize` messages
+- Each batch prepends older messages: `setRenderedSet(prev => [...newMessages, ...prev])`
+- No placeholder divs — only rendered messages exist in the DOM
+- Always bottom-up regardless of chat size (no `initialDirection` prop needed)
+- `renderMessages()` maps over `renderedSet` directly
+
+**State:**
+
+```tsx
+const [renderedSet, setRenderedSet] = useState<RenderedMessage[]>(() => {
+  if (messages.length === 0) return [];
+  const count = Math.min(batchSize, messages.length);
+  return messages
+    .slice(messages.length - count)
+    .map((msg, i) => ({ message: msg, index: messages.length - count + i }));
+});
+const [isLoading, setIsLoading] = useState(() => messages.length > showLoadingThreshold);
+const batchLoadingReadyRef = useRef(false);
+```
+
+**Batch loading (prepends older messages):**
+
+```tsx
+const loadNextBatch = () => {
+  setRenderedCount((currentCount) => {
+    const nextCount = Math.min(currentCount + batchSize, messages.length);
+    const startIdx = messages.length - nextCount;
+    const endIdx = messages.length - currentCount;
+    if (startIdx < endIdx) {
+      const newMessages = messages.slice(startIdx, endIdx).map((msg, i) => ({
+        message: msg, index: startIdx + i
+      }));
+      setRenderedSet((prev) => [...newMessages, ...prev]); // prepend
+    }
+    return nextCount;
+  });
+  // done → setIsLoading(false), call onRenderingComplete
+  // else → schedule next batch
+};
+```
+
+**Scroll anchoring — two-phase handshake:**
+
+1. `onScrollReady`: ProgressiveMessageList signals "I have content, scroll now"
+2. BaseChat scrolls (retries via `requestAnimationFrame` until `viewport.scrollHeight > 0`)
+3. BaseChat sets `scrollReadyRef.current = true`
+4. ProgressiveMessageList effect sees the ref → sets `batchLoadingReadyRef.current = true`
+5. Batch loading starts — prepends above the anchored bottom message
+
+```tsx
+// ProgressiveMessageList
+useEffect(() => {
+  if (renderedSet.length > 0 && onScrollReady) onScrollReady();
+}, [onScrollReady, renderedSet.length]);
+
+useEffect(() => {
+  if (scrollReadyRef && scrollReadyRef.current) {
+    batchLoadingReadyRef.current = true;
+  }
+}, [scrollReadyRef, scrollReadyRef?.current]);
+
+// BaseChat
+onScrollReady={() => {
+  if (hasScrolledRef.current) return;
+  const tryScroll = () => {
+    const viewport = scrollRef.current?.viewportRef.current;
+    if (!viewport || viewport.scrollHeight === 0) {
+      requestAnimationFrame(tryScroll);
+      return;
+    }
+    scrollRef.current?.scrollToBottom({ behavior: 'auto' });
+    hasScrolledRef.current = true;
+    scrollReadyRef.current = true; // signals batch loading can start
+  };
+  tryScroll();
+}}
+```
+
+**Streaming sync:** When new messages are appended during streaming, only the delta is added to `renderedSet`:
+
+```tsx
+useEffect(() => {
+  const prevLen = prevMsgCountRef.current;
+  prevMsgCountRef.current = messages.length;
+  if (messages.length > prevLen) {
+    const delta = messages.length - prevLen;
+    const newMessages = messages.slice(messages.length - delta, messages.length).map((msg, i) => ({
+      message: msg, index: messages.length - delta + i
+    }));
+    setRenderedSet((prev) => [...newMessages, ...prev]);
+  }
+}, [messages]);
+```
+
+**Execution order (mount):**
+
+1. React renders: `renderedSet = [last 20 messages]` + loading indicator
+2. `useEffect` fires → `onScrollReady()` → BaseChat
+3. BaseChat scrolls to bottom (retries until `scrollHeight > 0`)
+4. Scroll succeeds → `scrollReadyRef.current = true`
+5. ProgressiveMessageList effect → `batchLoadingReadyRef.current = true`
+6. Batches prepend above the anchored bottom message
+7. All loaded → `isLoading = false` → loading indicator disappears
 
 ### P3: Fix ScrollArea Dependency
 
@@ -221,9 +322,10 @@ This would reduce render frequency from potentially hundreds per second (token-b
 
 ## Proposed Implementation Order
 
-1. **P3** — ScrollArea fix (trivial, low risk)
-2. **P0** — Message-level memoization (highest ROI)
-3. **P1** — Index computation
-4. **P5** — Streaming update batching
-5. **P2** — Bottom-up rendering for large chats
-6. **P4** — Virtual scrolling (long-term, depends on whether P0-P2 solve the problem enough)
+1. ~~**P3**~~ ~~ScrollArea fix (trivial, low risk)~~
+2. ~~**P0**~~ ~~Message-level memoization (highest ROI)~~
+3. ~~**P1**~~ ~~Index computation~~
+4. ~~**P5**~~ ~~Streaming update batching~~
+5. ~~**P2**~~ ~~Bottom-up rendering for large chats~~
+6. **P3** — ScrollArea fix (trivial, low risk) — *if not already done*
+7. **P4** — Virtual scrolling (long-term, depends on whether P0-P2 solve the problem enough)
