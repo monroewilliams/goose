@@ -154,7 +154,6 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, ScrollAreaProps>(
     React.useEffect(() => {
       if (!autoScroll || !viewportRef.current) return;
 
-      const viewport = viewportRef.current;
       // Read height from ref (updated after DOM paints) rather than from children
       // which changes on every render
       const currentScrollHeight = childrenHeightRef.current;

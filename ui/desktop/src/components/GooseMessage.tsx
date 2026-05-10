@@ -25,7 +25,7 @@ interface GooseMessageProps {
   sessionId: string;
   message: Message;
   messageIndex: number;
-  toolCallChains: [number, number][];
+  toolCallChains: number[][];
   metadata?: string[];
   toolRequests: ToolRequestMessageContent[];
   toolResponsesMap: Map<string, ToolResponseMessageContent>;
@@ -136,7 +136,7 @@ const GooseMessageInner = ({
           <div className={cn(displayText && 'mt-2')}>
             <div className="relative flex flex-col w-full">
               <div className="flex flex-col gap-3">
-                {toolRequestRows.map(({ toolRequest, hasResponse, isPending, confirmationContent, isApprovalClicked }) => (
+                {toolRequestRows.map(({ toolRequest, isPending, confirmationContent, isApprovalClicked }) => (
                   <div className="goose-message-tool" key={toolRequest.id}>
                     <ToolCallWithResponse
                       sessionId={sessionId}
