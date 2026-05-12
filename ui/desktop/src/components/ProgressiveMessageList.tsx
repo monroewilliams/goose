@@ -101,8 +101,13 @@ export default function ProgressiveMessageList({
   });
   const [renderedSet, setRenderedSet] = useState<RenderedMessage[]>(() => {
     if (messages.length === 0) return [];
-    // Start with the last batch so there's real content for the ScrollArea to scroll to
-    const count = Math.min(batchSize, messages.length);
+    // For small chats (<= showLoadingThreshold), render all messages immediately.
+    // For larger chats, start with the last batch so there's real content for
+    // the ScrollArea to scroll to; older messages are prepended progressively.
+    const count =
+      messages.length <= showLoadingThreshold
+        ? messages.length
+        : Math.min(batchSize, messages.length);
     return messages
       .slice(messages.length - count)
       .map((msg, i) => ({ message: msg, index: messages.length - count + i }));
