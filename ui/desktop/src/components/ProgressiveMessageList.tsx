@@ -230,6 +230,7 @@ export default function ProgressiveMessageList({
       const isSearchShortcut = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'f';
       if (isSearchShortcut) {
         setRenderedCount(messages.length);
+        setRenderedSet(messages.map((msg, i) => ({ message: msg, index: i })));
         setIsLoading(false);
         if (timeoutRef.current) {
           window.clearTimeout(timeoutRef.current);
