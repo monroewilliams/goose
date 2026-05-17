@@ -377,7 +377,16 @@ impl MessageContent {
                     metadata: res.metadata.clone(),
                 }))
             }
-            MessageContent::Thinking(_) | MessageContent::RedactedThinking(_) => None,
+            MessageContent::Thinking(_) | MessageContent::RedactedThinking(_) => {
+                // Thinking is meant for the agent's reasoning; preserve it
+                // when the audience is the assistant (provider). Filter it
+                // out for user-facing audiences.
+                if audience == Role::Assistant {
+                    Some(self.clone())
+                } else {
+                    None
+                }
+            }
             _ => Some(self.clone()),
         }
     }
