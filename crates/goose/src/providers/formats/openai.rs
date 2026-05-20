@@ -195,10 +195,18 @@ pub fn format_messages_with_options(
         let mut has_non_text_content = false;
         let mut reasoning_text = String::new();
 
+        // For assistant messages with thinking, skip text content when
+        // preserve_thinking_context is enabled. The reasoning is preserved
+        // via reasoning_content; echoing text back pollutes the prompt with
+        // filler. Non-thinking models (no thinking content) are unaffected.
+        let assistant_has_thinking = options.preserve_thinking_context
+            && message.role == Role::Assistant
+            && message.content.iter().any(|c| matches!(c, MessageContent::Thinking(_)));
+
         for content in &message.content {
             match content {
                 MessageContent::Text(text) => {
-                    if !text.text.is_empty() {
+                    if !text.text.is_empty() && !assistant_has_thinking {
                         if message.role == Role::User {
                             if let Some(image_path) = detect_image_path(&text.text) {
                                 if let Ok(image) = load_image_file(image_path) {
