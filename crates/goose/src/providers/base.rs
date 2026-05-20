@@ -459,6 +459,9 @@ pub struct ProviderMetadata {
     /// Hint shown in the model picker when this provider manages its own model selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_selection_hint: Option<String>,
+    /// Default context limit for dynamic models when not explicitly set per-model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_context_limit: Option<usize>,
 }
 
 impl ProviderMetadata {
@@ -493,6 +496,7 @@ impl ProviderMetadata {
             config_keys,
             setup_steps: vec![],
             model_selection_hint: None,
+            provider_context_limit: None,
         }
     }
 
@@ -515,6 +519,7 @@ impl ProviderMetadata {
             config_keys,
             setup_steps: vec![],
             model_selection_hint: None,
+            provider_context_limit: None,
         }
     }
 
@@ -529,6 +534,7 @@ impl ProviderMetadata {
             config_keys: vec![],
             setup_steps: vec![],
             model_selection_hint: None,
+            provider_context_limit: None,
         }
     }
 

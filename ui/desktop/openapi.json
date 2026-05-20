@@ -4672,6 +4672,12 @@
             "type": "string",
             "nullable": true
           },
+          "context_limit": {
+            "type": "integer",
+            "description": "Default context limit for dynamic models when not explicitly set per-model.",
+            "nullable": true,
+            "minimum": 0
+          },
           "description": {
             "type": "string",
             "nullable": true
@@ -6963,6 +6969,12 @@
           "name": {
             "type": "string",
             "description": "The unique identifier for this provider"
+          },
+          "provider_context_limit": {
+            "type": "integer",
+            "description": "Default context limit for dynamic models when not explicitly set per-model.",
+            "nullable": true,
+            "minimum": 0
           },
           "setup_steps": {
             "type": "array",

@@ -413,6 +413,11 @@ impl OpenAiProvider {
             api_client = api_client.with_headers(header_map)?;
         }
 
+        let model = if config.context_limit.is_some() && model.context_limit.is_none() {
+            model.with_context_limit(config.context_limit)
+        } else {
+            model
+        };
         let model = if let Some(ref fast_model_name) = config.fast_model {
             model.with_fast(fast_model_name, &config.name)?
         } else {

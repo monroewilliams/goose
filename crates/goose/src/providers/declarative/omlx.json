@@ -17,6 +17,7 @@
   ],
   "dynamic_models": true,
   "models": [],
+  "context_limit": 1048576,
   "supports_streaming": true,
   "requires_auth": false,
   "skip_canonical_filtering": true

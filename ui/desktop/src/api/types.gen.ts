@@ -211,6 +211,10 @@ export type DeclarativeProviderConfig = {
     base_path?: string | null;
     base_url: string;
     catalog_provider_id?: string | null;
+    /**
+     * Default context limit for dynamic models when not explicitly set per-model.
+     */
+    context_limit?: number | null;
     description?: string | null;
     display_name: string;
     /**
@@ -994,6 +998,10 @@ export type ProviderMetadata = {
      * The unique identifier for this provider
      */
     name: string;
+    /**
+     * Default context limit for dynamic models when not explicitly set per-model.
+     */
+    provider_context_limit?: number | null;
     /**
      * step-by-step instructions for set up providers eg: api key
      */

@@ -104,6 +104,9 @@ pub struct DeclarativeProviderConfig {
     pub fast_model: Option<String>,
     #[serde(default)]
     pub preserves_thinking: bool,
+    /// Default context limit for dynamic models when not explicitly set per-model.
+    #[serde(default)]
+    pub context_limit: Option<usize>,
 }
 
 fn default_requires_auth() -> bool {
@@ -321,6 +324,7 @@ pub fn create_custom_provider(
         setup_steps: vec![],
         fast_model: None,
         preserves_thinking,
+        context_limit: None,
     };
 
     let custom_providers_dir = custom_providers_dir();
@@ -401,6 +405,7 @@ pub fn update_custom_provider(params: UpdateCustomProviderParams) -> Result<()> 
             setup_steps: existing_config.setup_steps,
             fast_model: existing_config.fast_model.clone(),
             preserves_thinking,
+            context_limit: existing_config.context_limit,
         };
 
         let file_path = custom_provider_file_path(&updated_config.name)?;
