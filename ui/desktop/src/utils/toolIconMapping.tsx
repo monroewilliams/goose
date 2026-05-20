@@ -32,6 +32,7 @@ export const getToolIcon = (toolName: string): React.ComponentType<ToolIconProps
   switch (toolName) {
     // Developer Extension Tools
     case 'text_editor':
+    case 'edit':
       return FileEdit;
     case 'shell':
       return Terminal;
