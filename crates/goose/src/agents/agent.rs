@@ -34,8 +34,8 @@ use crate::context_mgmt::{
     check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
 };
 use crate::conversation::message::{
-    ActionRequiredData, Message, MessageContent, ProviderMetadata, SystemNotificationType,
-    ToolRequest,
+    ActionRequiredData, Message, MessageContent, MessageMetadata, ProviderMetadata,
+    SystemNotificationType, ToolRequest,
 };
 use crate::conversation::{debug_conversation_fix, fix_conversation, Conversation};
 use crate::mcp_utils::ToolResult;
@@ -1936,7 +1936,9 @@ impl Agent {
                                         response.role.clone(),
                                         response.created,
                                         thinking_content,
-                                    ).with_id(format!("msg_{}", Uuid::new_v4()));
+                                    )
+                                    .with_id(format!("msg_{}", Uuid::new_v4()))
+                                    .with_metadata(MessageMetadata::default().with_agent_invisible());
                                     messages_to_add.push(thinking_msg);
                                 }
 
