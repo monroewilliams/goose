@@ -15,6 +15,8 @@ import 'prismjs/components/prism-markup.js';
 import 'prismjs/components/prism-bash.js';
 import 'prismjs/components/prism-sql.js';
 import 'prismjs/components/prism-toml.js';
+import 'prismjs/components/prism-swift.js';
+import 'prismjs/components/prism-objectivec.js';
 import { useEffect, useState } from 'react';
 
 interface DiffLine {
@@ -45,6 +47,9 @@ const extMap: Record<string, string> = {
   bash: 'bash',
   sql: 'sql',
   toml: 'toml',
+  swift: 'swift',
+  m: 'objective-c',
+  mm: 'objective-c', // imperfect fallback — no dedicated ObjC++ Prism component; covers @ directives but not C++ syntax
 };
 
 function detectLanguage(fileName?: string): string | undefined {
@@ -164,7 +169,16 @@ function DiffLineWithSyntax({ line, language, index, dark }: DiffLineWithSyntaxP
     );
   }
 
-  const tokens = Prism.tokenize(content, Prism.languages[language]);
+  let highlighted: React.ReactNode;
+  // Wrap in try/catch because the grammar may not fully understand the content
+  // (e.g. Objective-C highlighter on Objective-C++ files with C++ constructs).
+  // Falling back to plain text is preferable to crashing the whole diff view.
+  try {
+    const tokens = Prism.tokenize(content, Prism.languages[language]);
+    highlighted = renderTokens(tokens, tc);
+  } catch {
+    highlighted = content;
+  }
   return (
     <div
       style={{
@@ -179,7 +193,7 @@ function DiffLineWithSyntax({ line, language, index, dark }: DiffLineWithSyntaxP
       }}
     >
       <span style={{ color: prefixColor }}>{prefix}</span>
-      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderTokens(tokens, tc)}</span>
+      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{highlighted}</span>
     </div>
   );
 }
